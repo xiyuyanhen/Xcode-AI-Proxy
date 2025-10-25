@@ -13,7 +13,7 @@
 
 ## 使用方法
 
-⚠️⚠️⚠️确保你已安装 Python 3.12 + ⚠️⚠️⚠️
+⚠️⚠️⚠️ 确保你已安装 Python 3.12 + ⚠️⚠️⚠️
 
 #### 1. 配置 API 密钥
 
@@ -32,23 +32,11 @@ DEEPSEEK_API_KEY=你的DeepSeek API密钥
 
 #### 2. 启动服务
 
-
-**依赖安装:**
-
-```bash
-uv venv
-
-source .venv/bin/activate
-
-uv sync
-
-```
-
-**启动:**
+项目已经提供 `start.sh` 启动脚本，会自动完成依赖安装、虚拟环境配置并启动服务。
 
 ```bash
-python3 server.py
-
+chmod +x start.sh   # 首次使用时赋予执行权限
+./start.sh
 ```
 
 服务启动在 `http://localhost:8899`
