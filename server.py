@@ -11,6 +11,7 @@ import logging
 from datetime import datetime
 from typing import Dict, Any, Optional, Union
 import json
+import argparse
 
 import httpx
 from fastapi import FastAPI, Request, HTTPException
@@ -606,10 +607,10 @@ async def messages(request: Request):
 
 
 # 启动函数
-def main():
+def main(port=PORT, host=HOST):
     """启动服务器"""
     logger.info("🚀 Xcode AI 代理服务已启动")
-    logger.info(f"📡 监听地址: http://{HOST}:{PORT}")
+    logger.info(f"📡 监听地址: http://{host}:{port}")
     logger.info("🎯 当前可用的模型:")
     for model, config in API_CONFIGS.items():
         logger.info(f"   ✅ {model} ({config.get('name', config['type'])})")
@@ -624,14 +625,24 @@ def main():
     logger.info(f"   请求超时: {int(REQUEST_TIMEOUT * 1000)}ms")
 
     logger.info("📋 配置 Xcode:")
-    logger.info(f"   ANTHROPIC_BASE_URL: http://localhost:{PORT}")
+    logger.info(f"   ANTHROPIC_BASE_URL: http://localhost:{port}")
     logger.info("   ANTHROPIC_AUTH_TOKEN: any-string-works")
     logger.info("🔧 功能: 智谱/Kimi/DeepSeek代理，流式响应，动态配置，智能重试")
 
     uvicorn.run(
-        "server:app", host=HOST, port=PORT, reload=False, log_level="info"
+        "server:app", host=host, port=port, reload=False, log_level="info"
     )
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(
+        description="Xcode AI Proxy CLI - 启动 AI 代理服务"
+    )
+    parser.add_argument(
+        "--port", type=int, default=PORT, help="服务监听端口 (默认: 8899)"
+    )
+    parser.add_argument(
+        "--host", type=str, default=HOST, help="服务监听地址 (默认: 0.0.0.0)"
+    )
+    args = parser.parse_args()
+    main(port=args.port, host=args.host)
