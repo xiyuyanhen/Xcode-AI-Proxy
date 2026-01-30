@@ -1,6 +1,6 @@
 """
 Xcode AI Proxy - Python 版本
-使用 FastAPI 重写的 AI 代理服务，支持智谱 GLM-4.6、Kimi、DeepSeek 和通义千问模型
+使用 FastAPI 重写的 AI 代理服务，支持智谱 GLM-4.6、Kimi、DeepSeek、通义千问和 Ollama 模型
 根据环境变量动态加载可用模型
 """
 
@@ -115,6 +115,30 @@ if os.getenv("DASHSCOPE_API_KEY"):
         }
     )
 
+# 若显式设置 OLLAMA_BASE_URL，则从 Ollama 拉取模型列表并加入配置（方案 B）
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "").strip().rstrip("/")
+if OLLAMA_BASE_URL:
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            r = client.get(f"{OLLAMA_BASE_URL}/api/tags")
+            r.raise_for_status()
+            data = r.json()
+        for m in data.get("models") or []:
+            name = (m.get("name") or "").strip()
+            if name:
+                API_CONFIGS[name] = {
+                    "api_url": OLLAMA_BASE_URL,
+                    "api_key": None,
+                    "type": "ollama",
+                    "name": name,
+                }
+        if data.get("models"):
+            logger.info(f"📋 已从 Ollama 拉取 {len(data['models'])} 个模型")
+    except Exception as e:
+        logger.warning(
+            f"⚠️ Ollama 模型列表拉取失败（请确认 {OLLAMA_BASE_URL} 可访问且 Ollama 已运行），已跳过: {e}"
+        )
+
 if not API_CONFIGS:
     logger.error("❌ 未配置任何模型API密钥，请至少设置一个环境变量:")
     for env_var, model_name in REQUIRED_ENV_VARS.items():
@@ -129,7 +153,7 @@ for model_id, config in API_CONFIGS.items():
 # FastAPI 应用初始化
 app = FastAPI(
     title="Xcode AI Proxy",
-    description="AI 代理服务，支持智谱 GLM-4.6、Kimi、DeepSeek 和通义千问模型",
+    description="AI 代理服务，支持智谱 GLM-4.6、Kimi、DeepSeek、通义千问和 Ollama 模型",
     version="1.0.0",
 )
 
@@ -372,6 +396,57 @@ async def handle_qwen_request(request_body: dict) -> Union[dict, StreamingRespon
         )
     else:
         logger.info("📦 返回通义千问非流式响应")
+        return response.json()
+
+
+# Ollama API 处理（OpenAI 兼容 /v1/chat/completions，本地无需 API Key）
+async def handle_ollama_request(request_body: dict) -> Union[dict, StreamingResponse]:
+    """处理 Ollama API 请求"""
+    model = request_body.get("model", "")
+    if model not in API_CONFIGS or API_CONFIGS[model]["type"] != "ollama":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": {
+                    "message": f"不支持的 Ollama 模型: {model}",
+                    "type": "invalid_request_error",
+                }
+            },
+        )
+    config = API_CONFIGS[model]
+    logger.info(f"📡 路由到 Ollama API (模型: {model})")
+
+    async def make_request():
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+            headers = {"Content-Type": "application/json"}
+            if config.get("api_key"):
+                headers["Authorization"] = f"Bearer {config['api_key']}"
+            response = await client.post(
+                f"{config['api_url']}/v1/chat/completions",
+                json=request_body,
+                headers=headers,
+            )
+            response.raise_for_status()
+            return response
+
+    response = await with_retry(make_request)
+    logger.info(f"✅ Ollama API 响应状态: {response.status_code}")
+
+    if request_body.get("stream", False):
+        logger.info("🔄 返回 Ollama 流式响应")
+        response_headers = dict(response.headers)
+        response_headers.pop("content-length", None)
+        response_headers.pop("content-encoding", None)
+
+        async def generate():
+            async for chunk in response.aiter_bytes(chunk_size=8192):
+                yield chunk
+
+        return StreamingResponse(
+            generate(), status_code=response.status_code, headers=response_headers
+        )
+    else:
+        logger.info("📦 返回 Ollama 非流式响应")
         return response.json()
 
 
@@ -661,6 +736,8 @@ async def handle_proxy(request_data: dict):
             return await handle_deepseek_request(request_data)
         elif config["type"] == "qwen":
             return await handle_qwen_request(request_data)
+        elif config["type"] == "ollama":
+            return await handle_ollama_request(request_data)
         else:
             raise HTTPException(
                 status_code=500,
