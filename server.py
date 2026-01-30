@@ -1,6 +1,6 @@
 """
 Xcode AI Proxy - Python 版本
-使用 FastAPI 重写的 AI 代理服务，支持智谱 GLM-4.6、Kimi、DeepSeek、通义千问和 Ollama 模型
+使用 FastAPI 重写的 AI 代理服务，支持智谱 GLM-4.6、Kimi、DeepSeek、通义千问、Ollama 本地与 Ollama Cloud 模型
 根据环境变量动态加载可用模型
 """
 
@@ -139,6 +139,51 @@ if OLLAMA_BASE_URL:
             f"⚠️ Ollama 模型列表拉取失败（请确认 {OLLAMA_BASE_URL} 可访问且 Ollama 已运行），已跳过: {e}"
         )
 
+# Ollama Cloud：显式设置 OLLAMA_CLOUD_API_KEY 时启用，与本地 OLLAMA_BASE_URL 相互独立
+OLLAMA_CLOUD_API_KEY = (os.getenv("OLLAMA_CLOUD_API_KEY") or "").strip()
+OLLAMA_CLOUD_BASE_URL = (
+    os.getenv("OLLAMA_CLOUD_BASE_URL", "https://ollama.com").strip().rstrip("/")
+)
+if OLLAMA_CLOUD_API_KEY:
+    cloud_models_added = False
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            r = client.get(
+                f"{OLLAMA_CLOUD_BASE_URL}/api/tags",
+                headers={"Authorization": f"Bearer {OLLAMA_CLOUD_API_KEY}"},
+            )
+            r.raise_for_status()
+            data = r.json()
+        for m in data.get("models") or []:
+            name = (m.get("name") or "").strip()
+            if name:
+                model_id = f"ollama-cloud:{name}"
+                API_CONFIGS[model_id] = {
+                    "api_url": OLLAMA_CLOUD_BASE_URL,
+                    "api_key": OLLAMA_CLOUD_API_KEY,
+                    "type": "ollama_cloud",
+                    "name": model_id,
+                }
+                cloud_models_added = True
+        if cloud_models_added:
+            logger.info(f"📋 已从 Ollama Cloud 拉取 {len(data.get('models') or [])} 个模型")
+    except Exception as e:
+        fallback = (os.getenv("OLLAMA_CLOUD_MODELS") or "").strip()
+        if fallback:
+            for name in (s.strip() for s in fallback.split(",") if s.strip()):
+                model_id = f"ollama-cloud:{name}"
+                API_CONFIGS[model_id] = {
+                    "api_url": OLLAMA_CLOUD_BASE_URL,
+                    "api_key": OLLAMA_CLOUD_API_KEY,
+                    "type": "ollama_cloud",
+                    "name": model_id,
+                }
+            logger.info(f"📋 Ollama Cloud 使用兜底模型列表: {fallback}")
+        else:
+            logger.warning(
+                f"⚠️ Ollama Cloud 模型列表拉取失败且未配置 OLLAMA_CLOUD_MODELS，已跳过: {e}"
+            )
+
 if not API_CONFIGS:
     logger.error("❌ 未配置任何模型API密钥，请至少设置一个环境变量:")
     for env_var, model_name in REQUIRED_ENV_VARS.items():
@@ -153,7 +198,7 @@ for model_id, config in API_CONFIGS.items():
 # FastAPI 应用初始化
 app = FastAPI(
     title="Xcode AI Proxy",
-    description="AI 代理服务，支持智谱 GLM-4.6、Kimi、DeepSeek、通义千问和 Ollama 模型",
+    description="AI 代理服务，支持智谱 GLM-4.6、Kimi、DeepSeek、通义千问、Ollama 本地与 Ollama Cloud 模型",
     version="1.0.0",
 )
 
@@ -450,6 +495,60 @@ async def handle_ollama_request(request_body: dict) -> Union[dict, StreamingResp
         return response.json()
 
 
+# Ollama Cloud API 处理（需 API Key，模型 id 前缀 ollama-cloud:）
+async def handle_ollama_cloud_request(request_body: dict) -> Union[dict, StreamingResponse]:
+    """处理 Ollama Cloud API 请求，转发时使用去掉前缀的模型名"""
+    model_id = request_body.get("model", "")
+    if model_id not in API_CONFIGS or API_CONFIGS[model_id]["type"] != "ollama_cloud":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": {
+                    "message": f"不支持的 Ollama Cloud 模型: {model_id}",
+                    "type": "invalid_request_error",
+                }
+            },
+        )
+    config = API_CONFIGS[model_id]
+    backend_model = model_id[len("ollama-cloud:") :] if model_id.startswith("ollama-cloud:") else model_id
+    logger.info(f"📡 路由到 Ollama Cloud API (模型: {model_id} -> {backend_model})")
+
+    forward_body = {**request_body, "model": backend_model}
+
+    async def make_request():
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+            response = await client.post(
+                f"{config['api_url']}/v1/chat/completions",
+                json=forward_body,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {config['api_key']}",
+                },
+            )
+            response.raise_for_status()
+            return response
+
+    response = await with_retry(make_request)
+    logger.info(f"✅ Ollama Cloud API 响应状态: {response.status_code}")
+
+    if request_body.get("stream", False):
+        logger.info("🔄 返回 Ollama Cloud 流式响应")
+        response_headers = dict(response.headers)
+        response_headers.pop("content-length", None)
+        response_headers.pop("content-encoding", None)
+
+        async def generate():
+            async for chunk in response.aiter_bytes(chunk_size=8192):
+                yield chunk
+
+        return StreamingResponse(
+            generate(), status_code=response.status_code, headers=response_headers
+        )
+    else:
+        logger.info("📦 返回 Ollama Cloud 非流式响应")
+        return response.json()
+
+
 # 新增：清洗 messages，确保每条 message['content'] 为字符串
 def sanitize_messages(messages):
     """
@@ -738,6 +837,8 @@ async def handle_proxy(request_data: dict):
             return await handle_qwen_request(request_data)
         elif config["type"] == "ollama":
             return await handle_ollama_request(request_data)
+        elif config["type"] == "ollama_cloud":
+            return await handle_ollama_cloud_request(request_data)
         else:
             raise HTTPException(
                 status_code=500,

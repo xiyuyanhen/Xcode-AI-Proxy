@@ -35,6 +35,10 @@ DASHSCOPE_API_KEY=你的通义千问API密钥
 # Ollama 可选：显式设置后才启用，启动时会从该地址拉取模型列表
 # 示例: http://localhost:11434 或 http://192.168.1.70:11434
 # OLLAMA_BASE_URL=http://localhost:11434
+
+# Ollama Cloud 可选：与本地独立，需设置 API Key（https://ollama.com/settings/keys）
+# OLLAMA_CLOUD_API_KEY=你的云端API密钥
+# 拉取失败时可配置兜底: OLLAMA_CLOUD_MODELS=llama3,qwen3
 ```
 
 #### 2. 启动服务
@@ -69,7 +73,8 @@ chmod +x start.sh   # 首次使用时赋予执行权限
 - `deepseek-chat` - DeepSeek Chat (对话模式)
 - `qwen-plus` - 通义千问 Plus
 - `qwen-turbo` - 通义千问 Turbo
-- **Ollama**：若设置了 `OLLAMA_BASE_URL`，代理启动时会从 Ollama 拉取模型列表，暴露的模型名与本地 `ollama list` 一致（如 `llama3:8b-instruct-fp16`、`qwen3` 等）
+- **Ollama（本地）**：若设置了 `OLLAMA_BASE_URL`，代理启动时会从 Ollama 拉取模型列表，暴露的模型名与本地 `ollama list` 一致（如 `llama3:8b-instruct-fp16`、`qwen3` 等）
+- **Ollama Cloud（云端）**：若设置了 `OLLAMA_CLOUD_API_KEY`，代理会请求云端 `/api/tags` 拉取模型列表，暴露的模型 id 带前缀 `ollama-cloud:`（如 `ollama-cloud:llama3`），与本地模型区分；拉取失败时可配置 `OLLAMA_CLOUD_MODELS`（逗号分隔）作为兜底列表
 
 ## 常见问题
 
@@ -78,6 +83,12 @@ A: 检查是否正确设置了 API 密钥，确保 8899 端口未被占用
 
 **Q: 启用了 Ollama 但模型列表里没有本地模型？**
 A: 确认已显式设置 `OLLAMA_BASE_URL`（如 `http://localhost:11434`），且该地址可访问、Ollama 服务已运行；启动时代理会请求 `/api/tags` 拉取模型列表，失败则跳过 Ollama
+
+**Q: 如何区分本地 Ollama 与 Ollama Cloud 模型？**
+A: 本地模型 id 与 `ollama list` 一致（如 `llama3:8b-instruct-fp16`）；云端模型 id 带前缀 `ollama-cloud:`（如 `ollama-cloud:llama3`）。云端需配置 `OLLAMA_CLOUD_API_KEY`，与本地 `OLLAMA_BASE_URL` 相互独立。
+
+**Q: Ollama Cloud 模型列表为空或拉取失败？**
+A: 确认已设置 `OLLAMA_CLOUD_API_KEY`（从 https://ollama.com/settings/keys 获取）。若云端 `/api/tags` 不可用，可配置兜底列表：`OLLAMA_CLOUD_MODELS=llama3,qwen3`（逗号分隔）。
 
 **Q: Xcode 还是连不上？**
 A: 确认服务正在运行，Base URL 填写正确：`http://localhost:8899`或端口填写正确：`8899`
