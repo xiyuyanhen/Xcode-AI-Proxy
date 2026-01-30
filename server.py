@@ -1,6 +1,6 @@
 """
 Xcode AI Proxy - Python 版本
-使用 FastAPI 重写的 AI 代理服务，支持智谱 GLM-4.6、Kimi 和 DeepSeek 模型
+使用 FastAPI 重写的 AI 代理服务，支持智谱 GLM-4.6、Kimi、DeepSeek 和通义千问模型
 根据环境变量动态加载可用模型
 """
 
@@ -48,6 +48,7 @@ REQUIRED_ENV_VARS = {
     "ZHIPU_API_KEY": "GLM-4.6 模型",
     "KIMI_API_KEY": "Kimi 模型",
     "DEEPSEEK_API_KEY": "DeepSeek 模型",
+    "DASHSCOPE_API_KEY": "通义千问 模型",
 }
 
 # 检查所有环境变量，但只给出警告而不退出
@@ -95,6 +96,25 @@ if os.getenv("DEEPSEEK_API_KEY"):
         }
     )
 
+# 如果有通义千问（DashScope）API 密钥，则添加通义千问模型配置（OpenAI 兼容模式）
+if os.getenv("DASHSCOPE_API_KEY"):
+    API_CONFIGS.update(
+        {
+            "qwen-plus": {
+                "api_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "api_key": os.getenv("DASHSCOPE_API_KEY"),
+                "type": "qwen",
+                "name": "通义千问 Plus",
+            },
+            "qwen-turbo": {
+                "api_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "api_key": os.getenv("DASHSCOPE_API_KEY"),
+                "type": "qwen",
+                "name": "通义千问 Turbo",
+            },
+        }
+    )
+
 if not API_CONFIGS:
     logger.error("❌ 未配置任何模型API密钥，请至少设置一个环境变量:")
     for env_var, model_name in REQUIRED_ENV_VARS.items():
@@ -109,7 +129,7 @@ for model_id, config in API_CONFIGS.items():
 # FastAPI 应用初始化
 app = FastAPI(
     title="Xcode AI Proxy",
-    description="AI 代理服务，支持智谱 GLM-4.6、Kimi 和 DeepSeek 模型",
+    description="AI 代理服务，支持智谱 GLM-4.6、Kimi、DeepSeek 和通义千问模型",
     version="1.0.0",
 )
 
@@ -309,6 +329,49 @@ async def handle_kimi_request(request_body: dict) -> Union[dict, StreamingRespon
         )
     else:
         logger.info("📦 返回Kimi非流式响应")
+        return response.json()
+
+
+# 通义千问（DashScope OpenAI 兼容）API 处理
+async def handle_qwen_request(request_body: dict) -> Union[dict, StreamingResponse]:
+    """处理通义千问 API 请求（OpenAI 兼容模式）"""
+    model = request_body.get("model", "qwen-plus")
+    if model not in API_CONFIGS or API_CONFIGS[model]["type"] != "qwen":
+        model = "qwen-plus"  # 回退到默认
+    logger.info(f"📡 路由到通义千问 API (模型: {model})")
+
+    async def make_request():
+        config = API_CONFIGS[model]
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+            response = await client.post(
+                f"{config['api_url']}/chat/completions",
+                json={**request_body, "model": model},
+                headers={
+                    "Authorization": f"Bearer {config['api_key']}",
+                    "Content-Type": "application/json",
+                },
+            )
+            response.raise_for_status()
+            return response
+
+    response = await with_retry(make_request)
+    logger.info(f"✅ 通义千问 API 响应状态: {response.status_code}")
+
+    if request_body.get("stream", False):
+        logger.info("🔄 返回通义千问流式响应")
+        response_headers = dict(response.headers)
+        response_headers.pop("content-length", None)
+        response_headers.pop("content-encoding", None)
+
+        async def generate():
+            async for chunk in response.aiter_bytes(chunk_size=8192):
+                yield chunk
+
+        return StreamingResponse(
+            generate(), status_code=response.status_code, headers=response_headers
+        )
+    else:
+        logger.info("📦 返回通义千问非流式响应")
         return response.json()
 
 
@@ -596,6 +659,8 @@ async def handle_proxy(request_data: dict):
             return await handle_kimi_request(request_data)
         elif config["type"] == "deepseek":
             return await handle_deepseek_request(request_data)
+        elif config["type"] == "qwen":
+            return await handle_qwen_request(request_data)
         else:
             raise HTTPException(
                 status_code=500,

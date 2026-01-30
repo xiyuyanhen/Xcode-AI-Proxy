@@ -1,15 +1,15 @@
 # Xcode AI Proxy
 
-解决 Xcode 中无法直接添加智谱 GLM、Kimi 和 DeepSeek 模型的问题。
+解决 Xcode 中无法直接添加智谱 GLM、Kimi、DeepSeek 和通义千问模型的问题。
 
 ## 解决什么问题？
 
-当你在 Xcode 中尝试添加智谱、Kimi 或 DeepSeek AI 提供商时，会遇到：
+当你在 Xcode 中尝试添加智谱、Kimi、DeepSeek 或通义千问 AI 提供商时，会遇到：
 
 - ❌ "Provider is not valid"
 - ❌ "Models could not be fetched with the provided account details"
 
-这个代理服务让你可以在 Xcode 中正常使用智谱 GLM-4.6、Kimi 和 DeepSeek 模型。
+这个代理服务让你可以在 Xcode 中正常使用智谱 GLM-4.6、Kimi、DeepSeek 和通义千问模型。
 
 ## 使用方法
 
@@ -28,6 +28,9 @@ KIMI_API_KEY=你的Kimi API密钥
 
 # DeepSeek API 密钥 (从 https://platform.deepseek.com/ 获取)
 DEEPSEEK_API_KEY=你的DeepSeek API密钥
+
+# 通义千问 API 密钥 (从 https://bailian.console.aliyun.com/ 或阿里云百炼获取)
+DASHSCOPE_API_KEY=你的通义千问API密钥
 ```
 
 #### 2. 启动服务
@@ -52,7 +55,7 @@ chmod +x start.sh   # 首次使用时赋予执行权限
 
 - **端口**: `8899`
 
-现在可以在 Xcode 中正常使用智谱 GLM-4.6、Kimi 和 DeepSeek 模型了！
+现在可以在 Xcode 中正常使用智谱 GLM-4.6、Kimi、DeepSeek 和通义千问模型了！
 
 ## 支持的模型
 
@@ -60,6 +63,8 @@ chmod +x start.sh   # 首次使用时赋予执行权限
 - `kimi-k2-0905-preview` - Kimi K2
 - `deepseek-reasoner` - DeepSeek Reasoner (思维模式)
 - `deepseek-chat` - DeepSeek Chat (对话模式)
+- `qwen-plus` - 通义千问 Plus
+- `qwen-turbo` - 通义千问 Turbo
 
 ## 常见问题
 
