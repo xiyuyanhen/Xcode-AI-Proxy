@@ -32,6 +32,16 @@ DEEPSEEK_API_KEY=你的DeepSeek API密钥
 # 通义千问 API 密钥 (从 https://bailian.console.aliyun.com/ 或阿里云百炼获取)
 DASHSCOPE_API_KEY=你的通义千问API密钥
 
+# Aihubmix API 密钥（从 https://aihubmix.com/token 获取）
+AIHUBMIX_API_KEY=你的Aihubmix API密钥
+
+# Aihubmix API Base URL（默认 https://aihubmix.com/v1）
+AIHUBMIX_BASE_URL=https://aihubmix.com/v1
+
+# 拉取失败时可配置兜底模型 id 列表（逗号分隔，可选）
+# 例如：AIHUBMIX_MODELS_FALLBACK=gpt-4o-mini,gpt-4o-search-preview
+AIHUBMIX_MODELS_FALLBACK=
+
 # Ollama 可选：显式设置后才启用，启动时会从该地址拉取模型列表
 # 示例: http://localhost:11434 或 http://192.168.1.70:11434
 # OLLAMA_BASE_URL=http://localhost:11434
@@ -134,6 +144,7 @@ openai_base_url = "http://127.0.0.1:8899/v1"
 - `deepseek-chat` - DeepSeek Chat (对话模式)
 - `qwen-plus` - 通义千问 Plus
 - `qwen-turbo` - 通义千问 Turbo
+- **Aihubmix**：设置 `AIHUBMIX_API_KEY` 后，代理启动时会拉取 `https://aihubmix.com/v1/models`，暴露的模型 id 与返回一致
 - **Ollama（本地）**：若设置了 `OLLAMA_BASE_URL`，代理启动时会从 Ollama 拉取模型列表，暴露的模型名与本地 `ollama list` 一致（如 `llama3:8b-instruct-fp16`、`qwen3` 等）
 - **Ollama Cloud（云端）**：若设置了 `OLLAMA_CLOUD_API_KEY`，代理会请求云端 `/api/tags` 拉取模型列表，暴露的模型 id 带前缀 `ollama-cloud:`（如 `ollama-cloud:llama3`），与本地模型区分；拉取失败时可配置 `OLLAMA_CLOUD_MODELS`（逗号分隔）作为兜底列表
 

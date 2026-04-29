@@ -1,6 +1,6 @@
 """
 Xcode AI Proxy - Python 版本
-使用 FastAPI 重写的 AI 代理服务，支持智谱 GLM-4.6、Kimi、DeepSeek、通义千问、Ollama 本地与 Ollama Cloud 模型
+使用 FastAPI 重写的 AI 代理服务，支持智谱 GLM-4.6、Kimi、DeepSeek、通义千问、Aihubmix、Ollama 本地与 Ollama Cloud 模型
 根据环境变量动态加载可用模型
 """
 
@@ -114,6 +114,65 @@ if os.getenv("DASHSCOPE_API_KEY"):
             },
         }
     )
+
+#
+# Aihubmix：启动时自动拉取 /v1/models
+#
+AIHUBMIX_API_KEY = (os.getenv("AIHUBMIX_API_KEY") or "").strip()
+if AIHUBMIX_API_KEY:
+    AIHUBMIX_BASE_URL = (
+        os.getenv("AIHUBMIX_BASE_URL", "https://aihubmix.com/v1").strip().rstrip("/")
+    )
+    AIHUBMIX_MODELS_FALLBACK = (os.getenv("AIHUBMIX_MODELS_FALLBACK") or "").strip()
+
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            r = client.get(
+                f"{AIHUBMIX_BASE_URL}/models",
+                headers={
+                    "Authorization": f"Bearer {AIHUBMIX_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+            )
+            r.raise_for_status()
+            data = r.json()
+
+        models = [
+            (m.get("id") or "").strip()
+            for m in (data.get("data") or [])
+            if isinstance(m, dict) and (m.get("id") or "").strip()
+        ]
+
+        if not models:
+            raise RuntimeError("models 列表为空")
+
+        added = 0
+        for model_id in models:
+            if model_id in API_CONFIGS:
+                continue
+            API_CONFIGS[model_id] = {
+                "api_url": AIHUBMIX_BASE_URL,
+                "api_key": AIHUBMIX_API_KEY,
+                "type": "aihubmix",
+                "name": model_id,
+            }
+            added += 1
+        logger.info(f"📋 已从 Aihubmix 拉取 {added} 个模型")
+    except Exception as e:
+        fallback = AIHUBMIX_MODELS_FALLBACK
+        if fallback:
+            for model_id in (s.strip() for s in fallback.split(",") if s.strip()):
+                if model_id in API_CONFIGS:
+                    continue
+                API_CONFIGS[model_id] = {
+                    "api_url": AIHUBMIX_BASE_URL,
+                    "api_key": AIHUBMIX_API_KEY,
+                    "type": "aihubmix",
+                    "name": model_id,
+                }
+            logger.info(f"📋 Aihubmix 使用兜底模型列表: {fallback}")
+        else:
+            logger.warning(f"⚠️ Aihubmix 模型列表拉取失败，已跳过: {e}")
 
 # 若显式设置 OLLAMA_BASE_URL，则从 Ollama 拉取模型列表并加入配置（方案 B）
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "").strip().rstrip("/")
@@ -441,6 +500,60 @@ async def handle_qwen_request(request_body: dict) -> Union[dict, StreamingRespon
         )
     else:
         logger.info("📦 返回通义千问非流式响应")
+        return response.json()
+
+
+# Aihubmix API 处理（OpenAI 兼容 /v1/chat/completions）
+async def handle_aihubmix_request(
+    request_body: dict,
+) -> Union[dict, StreamingResponse]:
+    """处理 Aihubmix API 请求"""
+    model = request_body.get("model", "")
+    if model not in API_CONFIGS or API_CONFIGS[model]["type"] != "aihubmix":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": {
+                    "message": f"不支持的 Aihubmix 模型: {model}",
+                    "type": "invalid_request_error",
+                }
+            },
+        )
+
+    config = API_CONFIGS[model]
+    logger.info(f"📡 路由到 Aihubmix API (模型: {model})")
+
+    async def make_request():
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+            response = await client.post(
+                f"{config['api_url']}/chat/completions",
+                json=request_body,
+                headers={
+                    "Authorization": f"Bearer {config['api_key']}",
+                    "Content-Type": "application/json",
+                },
+            )
+            response.raise_for_status()
+            return response
+
+    response = await with_retry(make_request)
+    logger.info(f"✅ Aihubmix API 响应状态: {response.status_code}")
+
+    if request_body.get("stream", False):
+        logger.info("🔄 返回 Aihubmix 流式响应")
+        response_headers = dict(response.headers)
+        response_headers.pop("content-length", None)
+        response_headers.pop("content-encoding", None)
+
+        async def generate():
+            async for chunk in response.aiter_bytes(chunk_size=8192):
+                yield chunk
+
+        return StreamingResponse(
+            generate(), status_code=response.status_code, headers=response_headers
+        )
+    else:
+        logger.info("📦 返回 Aihubmix 非流式响应")
         return response.json()
 
 
@@ -835,6 +948,8 @@ async def handle_proxy(request_data: dict):
             return await handle_deepseek_request(request_data)
         elif config["type"] == "qwen":
             return await handle_qwen_request(request_data)
+        elif config["type"] == "aihubmix":
+            return await handle_aihubmix_request(request_data)
         elif config["type"] == "ollama":
             return await handle_ollama_request(request_data)
         elif config["type"] == "ollama_cloud":
@@ -998,7 +1113,7 @@ def main(port=PORT, host=HOST):
     logger.info("📋 配置 Xcode:")
     logger.info(f"   ANTHROPIC_BASE_URL: http://localhost:{port}")
     logger.info("   ANTHROPIC_AUTH_TOKEN: any-string-works")
-    logger.info("🔧 功能: 智谱/Kimi/DeepSeek代理，流式响应，动态配置，智能重试")
+    logger.info("🔧 功能: 智谱/Kimi/DeepSeek/通义千问/Aihubmix 代理，流式响应，动态配置，智能重试")
 
     uvicorn.run(
         "server:app", host=host, port=port, reload=False, log_level="info"
